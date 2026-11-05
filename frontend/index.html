@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Meeting Assistant - Intelligent Dashboard</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- React & ReactDOM (Local Fallback) -->
+    <script src="lib/react.development.js"></script>
+    <script src="lib/react-dom.development.js"></script>
+    <!-- Babel Standalone (Local Fallback) -->
+    <script src="lib/babel.min.js"></script>
+    <!-- Tailwind Play CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js (Local Fallback) -->
+    <script src="lib/chart.js"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#f5f3ff',
+                            100: '#ede9fe',
+                            200: '#ddd6fe',
+                            300: '#c4b5fd',
+                            400: '#a78bfa',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            700: '#6d28d9',
+                            800: '#5b21b6',
+                            900: '#4c1d95',
+                            950: '#1e1b4b',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #cbd5e1;
+        }
+        .glass-panel {
+            background: rgba(254, 254, 254, 0.02);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(254, 254, 254, 0.04);
+        }
+        .glass-card {
+            background: rgba(254, 254, 254, 0.015);
+            border: 1px solid rgba(254, 254, 254, 0.03);
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.1);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(139, 92, 246, 0.25);
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(139, 92, 246, 0.45);
+        }
+        @keyframes pulse-green {
+            0%, 100% {
+                transform: scale(1);
+                opacity: 1;
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+            }
+            50% {
+                transform: scale(1.15);
+                opacity: 0.8;
+                box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
+            }
+        }
+        .pulse-active {
+            animation: pulse-green 2s infinite;
+        }
+    </style>
+</head>
+<body class="font-sans antialiased min-h-screen overflow-x-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const API_BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
+
+        // ==========================================
+        // 1. Live Detection Toggle Component
+        // ==========================================
+        function LiveDetectionToggle({ onSessionStart, onSessionStop, onTranscriptUpdate, onVoiceCommand, activeMeetingId }) {
+            const [isRecording, setIsRecording] = useState(false);
+            const [session, setSession] = useState(null);
+            const [speechStatus, setSpeechStatus] = useState("Idle");
+            
+            const wsRef = useRef(null);
+            const audioContextRef = useRef(null);
+            const processorRef = useRef(null);
+            const mediaStreamRef = useRef(null);
+            const recognitionRef = useRef(null);
+
+            useEffect(() => {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (SpeechRecognition) {
+                    const rec = new SpeechRecognition();
+                    rec.continuous = true;
+                    rec.interimResults = false;
+                    rec.lang = 'en-US';
+                    
+                    rec.onresult = async (event) => {
+                        const lastIndex = event.results.length - 1;
+                        const text = event.results[lastIndex][0].transcript.trim();
+                        setSpeechStatus(`Command: "${text}"`);
+                        
+                        try {
+                            const res = await fetch(`${API_BASE}/voice-command`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ command: text, meeting_id: activeMeetingId })
+                            });
+                            if (res.ok) {
+                                const data = await res.json();
+                                onVoiceCommand(data);
+                                if (data.action === "start_recording" && !isRecording) {
+                                    startLiveSession();
+                                } else if (data.action === "stop_recording" && isRecording) {
+                                    stopLiveSession();
+                                }
+                            }
+                        } catch (err) {
+                            console.error(err);
+                        }
+                    };
+                    rec.onend = () => {
+                        if (isRecording && recognitionRef.current) {
+                            try { recognitionRef.current.start(); } catch (e) {}
+                        }
+                    };
+                    recognitionRef.current = rec;
+                }
+                return () => {
+                    if (recognitionRef.current) {
+                        recognitionRef.current.onend = null;
+                        recognitionRef.current.stop();
+                    }
+                };
+            }, [isRecording, activeMeetingId]);
+
+            const startLiveSession = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaStreamRef.current = stream;
+
+                    const formData = new FormData();
+                    formData.append('title', `Live Sync Session - ${new Date().toLocaleTimeString()}`);
+                    
+                    const res = await fetch(`${API_BASE}/live/start`, { method: 'POST', body: formData });
+                    if (!res.ok) throw new Error("Server rejected session");
+                    const data = await res.json();
+                    
+                    setSession({ sessionId: data.session_id, meetingId: data.meeting_id });
+                    onSessionStart(data.meeting_id, data.session_id);
+
+                    const wsHost = window.location.host || '127.0.0.1:8000';
+                    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                    const wsUrl = `${protocol}://${wsHost}/ws/live/${data.session_id}`;
+                    const ws = new WebSocket(wsUrl);
+                    wsRef.current = ws;
+
+                    ws.onopen = () => {
+                        setIsRecording(true);
+                        setSpeechStatus("Listening...");
+                        if (recognitionRef.current) {
+                            try { recognitionRef.current.start(); } catch (e) {}
+                        }
+                    };
+
+                    ws.onmessage = (event) => {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === "transcript") {
+                            onTranscriptUpdate(msg);
+                        }
+                    };
+
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    audioContextRef.current = audioContext;
+                    const source = audioContext.createMediaStreamSource(stream);
+                    const processor = audioContext.createScriptProcessor(2048, 1, 1);
+                    processorRef.current = processor;
+
+                    processor.onaudioprocess = (e) => {
+                        if (ws.readyState !== WebSocket.OPEN) return;
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        const pcmData = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
+                        ws.send(pcmData.buffer);
+                    };
+
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+                } catch (err) {
+                    alert("Live detection permission denied: " + err.message);
+                }
+            };
+
+            const stopLiveSession = async () => {
+                if (!session) return;
+                setIsRecording(false);
+                setSpeechStatus("Finalizing...");
+
+                if (processorRef.current) processorRef.current.disconnect();
+                if (audioContextRef.current) audioContextRef.current.close();
+                if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach(t => t.stop());
+                if (wsRef.current) wsRef.current.close();
+                if (recognitionRef.current) try { recognitionRef.current.stop(); } catch (e) {}
+
+                try {
+                    await fetch(`${API_BASE}/live/stop/${session.sessionId}`, { method: 'POST' });
+                    onSessionStop(session.meetingId);
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    setSession(null);
+                    setSpeechStatus("Idle");
+                }
+            };
+
+            return (
+                <div className="flex flex-col gap-2 p-3 glass-card rounded-xl border border-white/5 shadow-md">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-green-500 pulse-active' : 'bg-slate-500'}`}></div>
+                            <span className="text-xs font-semibold text-slate-300">Live Recording</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
+                            {speechStatus}
+                        </span>
+                    </div>
+                    <button
+                        onClick={isRecording ? stopLiveSession : startLiveSession}
+                        className={`w-full py-2 px-3 rounded-lg flex items-center justify-center gap-2 font-bold text-xs transition duration-300 ${
+                            isRecording ? 'bg-rose-600 hover:bg-rose-700 text-white' : 'bg-purple-600 hover:bg-purple-500 text-white'
+                        }`}
+                    >
+                        <i className={`fa-solid ${isRecording ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                        <span>{isRecording ? 'Stop Recording' : 'Start Live Session'}</span>
+                    </button>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 2. Translation Dropdown Selector
+        // ==========================================
+        function TranslationSwitcher({ activeLanguage, onLanguageChange }) {
+            const [languages, setLanguages] = useState({});
+            useEffect(() => {
+                fetch(`${API_BASE}/languages`).then(res => res.json()).then(setLanguages).catch(console.error);
+            }, []);
+
+            return (
+                <div className="flex items-center gap-2 bg-slate-900 border border-white/5 rounded-lg px-2.5 py-1.5">
+                    <i className="fa-solid fa-language text-slate-400 text-xs"></i>
+                    <select
+                        value={activeLanguage}
+                        onChange={(e) => onLanguageChange(e.target.value)}
+                        className="bg-transparent text-xs font-semibold text-slate-200 outline-none border-none cursor-pointer"
+                    >
+                        <option value="original" className="bg-slate-950">Original Transcript</option>
+                        {Object.entries(languages).map(([code, name]) => (
+                            <option key={code} value={code} className="bg-slate-950">
+                                Translate: {name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 3. Interactive Transcript Pane
+        // ==========================================
+        function LiveTranscriptPane({ transcript, liveTranscript }) {
+            const listEndRef = useRef(null);
+            useEffect(() => {
+                if (listEndRef.current) listEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            }, [transcript, liveTranscript]);
+
+            const segments = transcript?.segments || [];
+            const confidence = transcript?.confidence_score || "1.0";
+
+            const formatTime = (seconds) => {
+                if (seconds == null || isNaN(seconds)) return "00:00";
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            };
+
+            return (
+                <div className="card flex flex-col h-full glass-panel rounded-xl border border-white/5 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 bg-white/[0.01]">
+                        <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2">
+                            <i className="fa-solid fa-file-waveform text-purple-400"></i> Transcript
+                        </span>
+                        <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-white/5 font-mono">
+                            CONF: {Math.round(parseFloat(confidence) * 100)}%
+                        </span>
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto max-h-[300px] flex flex-col gap-3">
+                        {segments.map((seg, idx) => {
+                            const isLow = seg.is_low_confidence || (seg.confidence && parseFloat(seg.confidence) < 0.75);
+                            return (
+                                <div key={idx} className={`p-2.5 rounded-lg border text-xs leading-relaxed flex gap-2 ${
+                                    isLow ? 'bg-amber-500/[0.02] border-amber-500/20 text-amber-200' : 'bg-white/[0.005] border-transparent text-slate-300'
+                                }`}>
+                                    <span className="text-[10px] font-mono text-slate-500 mt-0.5">{formatTime(seg.start)}</span>
+                                    <div>
+                                        {seg.speaker && <span className="font-bold text-purple-400 mr-1.5">{seg.speaker}:</span>}
+                                        <span>{seg.text}</span>
+                                        {isLow && (
+                                            <div className="text-[9px] text-amber-500 font-semibold mt-1">
+                                                ⚠ Review recommended (low-confidence: {Math.round(parseFloat(seg.confidence) * 100)}%)
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {liveTranscript && (
+                            <div className="p-2.5 rounded-lg bg-purple-500/[0.02] border border-purple-500/10 text-xs italic text-slate-400">
+                                <span className="text-[10px] text-purple-400 font-bold mr-2">Live:</span>
+                                {liveTranscript}...
+                            </div>
+                        )}
+                        <div ref={listEndRef} />
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 4. Summarization Tab Card
+        // ==========================================
+        function SummaryCard({ summary }) {
+            const [tab, setTab] = useState('executive');
+            
+            let keyDecisions = [];
+            if (summary?.key_decisions) {
+                if (Array.isArray(summary.key_decisions)) {
+                    keyDecisions = summary.key_decisions;
+                } else {
+                    try {
+                        keyDecisions = JSON.parse(summary.key_decisions);
+                    } catch (e) {
+                        keyDecisions = [summary.key_decisions];
+                    }
+                }
+            }
+
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 overflow-hidden flex flex-col">
+                    <div className="flex border-b border-white/5 bg-white/[0.01] text-[10px] font-bold">
+                        {['executive', 'detailed', 'decisions'].map(t => (
+                            <button
+                                key={t}
+                                onClick={() => setTab(t)}
+                                className={`flex-1 py-2.5 border-b-2 uppercase tracking-wider outline-none ${
+                                    tab === t ? 'border-purple-500 text-purple-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+                                }`}
+                            >
+                                {t === 'decisions' ? 'Key Decisions' : `${t} Summary`}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="p-4 text-xs leading-relaxed text-slate-300 min-h-[140px] max-h-[220px] overflow-y-auto">
+                        {tab === 'executive' && <p>{summary?.executive_summary || 'No executive summary.'}</p>}
+                        {tab === 'detailed' && <p>{summary?.summary_text || 'No detailed analysis.'}</p>}
+                        {tab === 'decisions' && (
+                            <ul className="space-y-1.5">
+                                {keyDecisions.length === 0 ? (
+                                    <li className="text-slate-500 italic">No decisions logged.</li>
+                                ) : (
+                                    keyDecisions.map((dec, i) => (
+                                        <li key={i} className="flex gap-2 items-start">
+                                            <span className="text-purple-400 font-bold">•</span>
+                                            <span>{dec}</span>
+                                        </li>
+                                    ))
+                                )}
+                            </ul>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 5. Action Items Table
+        // ==========================================
+        function ActionItemsTable({ actionItems, onStatusToggle, meetingId }) {
+            const handleToggle = async (actionId, currentStatus) => {
+                const nextStatus = currentStatus === 'done' ? 'pending' : 'done';
+                try {
+                    const res = await fetch(`${API_BASE}/actions/${meetingId}/${actionId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: nextStatus })
+                    });
+                    if (res.ok) onStatusToggle(actionId, nextStatus);
+                } catch (e) { console.error(e); }
+            };
+
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 overflow-hidden flex flex-col h-full">
+                    <div className="px-4 py-3 border-b border-white/5 bg-white/[0.01] flex items-center justify-between">
+                        <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2">
+                            <i className="fa-solid fa-list-check text-purple-400"></i> Action Items
+                        </span>
+                    </div>
+                    <div className="overflow-y-auto max-h-[250px]">
+                        {actionItems.length === 0 ? (
+                            <div className="text-slate-500 text-xs italic py-8 text-center">No actions assigned.</div>
+                        ) : (
+                            <table className="w-full text-left text-xs border-collapse">
+                                <thead>
+                                    <tr className="border-b border-white/5 bg-white/[0.005] text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                                        <th className="py-2 px-3 w-8 text-center">Done</th>
+                                        <th className="py-2 px-3">Owner</th>
+                                        <th className="py-2 px-3">Task</th>
+                                        <th className="py-2 px-3 w-20">Deadline</th>
+                                        <th className="py-2 px-3 w-16 text-center">Priority</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {actionItems.map(item => {
+                                        const isDone = item.status === 'done';
+                                        return (
+                                            <tr key={item.action_id} className={`border-b border-white/5 hover:bg-white/[0.01] ${isDone ? 'opacity-50' : ''}`}>
+                                                <td className="py-2 px-3 text-center">
+                                                    <button onClick={() => handleToggle(item.action_id, item.status)} className="focus:outline-none">
+                                                        <i className={`fa-regular ${isDone ? 'fa-circle-check text-purple-500' : 'fa-circle text-slate-500'}`}></i>
+                                                    </button>
+                                                </td>
+                                                <td className="py-2 px-3 font-semibold text-slate-300">{item.owner}</td>
+                                                <td className={`py-2 px-3 text-slate-400 ${isDone ? 'line-through' : ''}`}>{item.task}</td>
+                                                <td className="py-2 px-3 text-[10px] text-slate-500">{item.deadline}</td>
+                                                <td className="py-2 px-3 text-center">
+                                                    <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded ${
+                                                        item.priority === 'high' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                                    }`}>
+                                                        {item.priority}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 6. Sentiment Timeline (Canvas Wrapper)
+        // ==========================================
+        function SentimentTimeline({ sentimentData }) {
+            const canvasRef = useRef(null);
+            const chartRef = useRef(null);
+
+            useEffect(() => {
+                if (canvasRef.current && sentimentData.length > 0) {
+                    if (chartRef.current) chartRef.current.destroy();
+
+                    const sorted = [...sentimentData].sort((a, b) => a.segment_index - b.segment_index);
+                    const labels = sorted.map((_, i) => `S-${i+1}`);
+                    const dataset = sorted.map(s => {
+                        const l = (s.label || '').toLowerCase();
+                        if (l === 'positive') return s.score;
+                        if (l === 'negative') return -s.score;
+                        return 0;
+                    });
+
+                    const ctx = canvasRef.current.getContext('2d');
+                    chartRef.current = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                data: dataset,
+                                borderColor: '#8b5cf6',
+                                backgroundColor: 'rgba(139, 92, 246, 0.05)',
+                                borderWidth: 1.5,
+                                tension: 0.3,
+                                fill: true
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                x: { grid: { color: 'rgba(255,255,255,0.02)' }, ticks: { color: '#64748b', font: { size: 9 } } },
+                                y: { min: -1.0, max: 1.0, grid: { color: 'rgba(255,255,255,0.02)' }, ticks: { color: '#64748b', font: { size: 9 } } }
+                            }
+                        }
+                    });
+                }
+            }, [sentimentData]);
+
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 p-4 flex flex-col h-[200px]">
+                    <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2 mb-2">
+                        <i className="fa-solid fa-chart-line text-purple-400"></i> Sentiment Timeline
+                    </span>
+                    <div className="flex-1 relative">
+                        {sentimentData.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-slate-500 italic text-xs">No sentiment logs.</div>
+                        ) : (
+                            <canvas ref={canvasRef}></canvas>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 7. Questions Log
+        // ==========================================
+        function QuestionsLog({ questions }) {
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 p-4 flex flex-col h-full max-h-[200px] overflow-y-auto">
+                    <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2 mb-3">
+                        <i className="fa-solid fa-circle-question text-purple-400"></i> Questions Raised
+                    </span>
+                    <div className="space-y-2">
+                        {questions.length === 0 ? (
+                            <div className="text-slate-500 text-xs italic text-center py-4">No questions detected.</div>
+                        ) : (
+                            questions.map((q, i) => (
+                                <div key={i} className="flex justify-between items-start gap-2 text-xs border-b border-white/5 pb-2">
+                                    <span className="text-slate-300">"{q.question_text}"</span>
+                                    <span className={`text-[8px] font-extrabold uppercase px-1.5 py-0.2 rounded ${
+                                        q.status === 'answered' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                    }`}>
+                                        {q.status}
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 8. Reminders Panel
+        // ==========================================
+        function ReminderPanel({ reminders, onReminderUpdate, meetingId }) {
+            const handleAction = async (reminderId, action) => {
+                try {
+                    await fetch(`${API_BASE}/reminders/${meetingId}/${action}/${reminderId}`, { method: 'POST' });
+                    onReminderUpdate(reminderId, action === 'dismiss' ? 'dismissed' : 'sent');
+                } catch (e) { console.error(e); }
+            };
+
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 p-4 flex flex-col h-full max-h-[200px] overflow-y-auto">
+                    <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2 mb-3">
+                        <i className="fa-solid fa-bell text-purple-400"></i> Reminders
+                    </span>
+                    <div className="space-y-2">
+                        {reminders.length === 0 ? (
+                            <div className="text-slate-500 text-xs italic text-center py-4">No reminders.</div>
+                        ) : (
+                            reminders.map((rem, i) => (
+                                <div key={i} className={`flex items-center justify-between text-xs border-b border-white/5 pb-2 ${rem.status === 'dismissed' ? 'opacity-50' : ''}`}>
+                                    <div>
+                                        <div className="text-slate-300 font-semibold">{rem.reminder_text}</div>
+                                        <div className="text-[9px] text-slate-500 uppercase tracking-wider">{rem.status}</div>
+                                    </div>
+                                    {rem.status !== 'dismissed' && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => handleAction(rem.reminder_id, 'dismiss')} className="text-[9px] font-bold bg-slate-800 text-slate-300 px-2 py-0.5 rounded">Dismiss</button>
+                                            <button onClick={() => handleAction(rem.reminder_id, 'resend')} className="text-[9px] font-bold bg-purple-600 text-white px-2 py-0.5 rounded">Send</button>
+                                        </div>
+                                    )}
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 9. Email MOM Composer
+        // ==========================================
+        function EmailComposer({ meetingId }) {
+            const [type, setType] = useState('mom');
+            const [recipient, setRecipient] = useState('');
+            const [subject, setSubject] = useState('');
+            const [body, setBody] = useState('');
+            const [statusMsg, setStatusMsg] = useState('');
+
+            useEffect(() => {
+                if (meetingId) {
+                    fetch(`${API_BASE}/email/draft/${meetingId}?type=${type}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            setSubject(data.subject || '');
+                            setBody(data.body || '');
+                            setRecipient((data.recipients || []).join(', '));
+                        })
+                        .catch(console.error);
+                }
+            }, [type, meetingId]);
+
+            const handleSend = async (e) => {
+                e.preventDefault();
+                setStatusMsg('Sending...');
+                try {
+                    const res = await fetch(`${API_BASE}/email/send/${meetingId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ recipient, subject, body, email_type: type })
+                    });
+                    if (res.ok) setStatusMsg('✓ Delivery successful!');
+                    else setStatusMsg('✗ Failed to send.');
+                } catch (err) { setStatusMsg('✗ Connection error.'); }
+            };
+
+            return (
+                <div className="card glass-panel rounded-xl border border-white/5 p-4 flex flex-col h-full">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-2.5 mb-3">
+                        <span className="font-bold text-xs text-slate-200 uppercase tracking-wide flex items-center gap-2">
+                            <i className="fa-solid fa-envelope text-purple-400"></i> Email Composer
+                        </span>
+                        <div className="flex bg-slate-900 border border-white/5 p-0.5 rounded text-[9px] font-bold">
+                            {['mom', 'action_assignment', 'followup'].map(opt => (
+                                <button
+                                    key={opt}
+                                    type="button"
+                                    onClick={() => setType(opt)}
+                                    className={`px-2 py-0.5 rounded capitalize ${type === opt ? 'bg-purple-600 text-white' : 'text-slate-400'}`}
+                                >
+                                    {opt.replace('_', ' ')}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <form onSubmit={handleSend} className="space-y-3 flex flex-col flex-1">
+                        <input
+                            type="text"
+                            value={recipient}
+                            onChange={(e) => setRecipient(e.target.value)}
+                            placeholder="Recipients (e.g. manager@corp.com)"
+                            className="bg-slate-950/60 border border-white/5 focus:border-purple-500 rounded px-2.5 py-1 text-xs text-slate-200 outline-none w-full"
+                        />
+                        <input
+                            type="text"
+                            value={subject}
+                            onChange={(e) => setSubject(e.target.value)}
+                            placeholder="Subject Line"
+                            className="bg-slate-950/60 border border-white/5 focus:border-purple-500 rounded px-2.5 py-1 text-xs text-slate-200 outline-none w-full"
+                        />
+                        <textarea
+                            value={body}
+                            onChange={(e) => setBody(e.target.value)}
+                            placeholder="Compose draft..."
+                            className="flex-1 bg-slate-950/60 border border-white/5 focus:border-purple-500 rounded px-2.5 py-1 text-xs text-slate-200 outline-none resize-none h-[110px]"
+                        />
+                        <div className="flex justify-between items-center pt-2">
+                            <span className="text-[10px] font-bold text-purple-400">{statusMsg}</span>
+                            <button type="submit" className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold px-3 py-1.5 rounded flex items-center gap-1.5">
+                                <i className="fa-solid fa-paper-plane"></i> Send MOM
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 10. Aggregate Workspace Analytics Dashboard
+        // ==========================================
+        function AnalyticsOverview() {
+            const [data, setData] = useState(null);
+            useEffect(() => {
+                fetch(`${API_BASE}/analytics/aggregate`).then(res => res.json()).then(setData).catch(console.error);
+            }, []);
+
+            if (!data || Object.keys(data).length === 0) return <div className="text-slate-500 text-xs italic p-10 text-center">Loading aggregates...</div>;
+
+            return (
+                <div className="p-5 flex flex-col gap-5 max-h-[85vh] overflow-y-auto w-full">
+                    <header className="border-b border-white/5 pb-3">
+                        <h2 className="text-sm font-extrabold text-slate-200 flex items-center gap-2">
+                            <i className="fa-solid fa-chart-line text-purple-500"></i> Workspace Analytics
+                        </h2>
+                    </header>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="glass-panel p-4 rounded-xl border border-white/5 flex items-center gap-3">
+                            <i className="fa-solid fa-calendar-check text-purple-400 text-lg"></i>
+                            <div>
+                                <div className="text-[9px] text-slate-500 font-bold uppercase">Meetings</div>
+                                <div className="text-sm font-bold">{data.total_meetings ?? 0}</div>
+                            </div>
+                        </div>
+                        <div className="glass-panel p-4 rounded-xl border border-white/5 flex items-center gap-3">
+                            <i className="fa-solid fa-clock text-emerald-400 text-lg"></i>
+                            <div>
+                                <div className="text-[9px] text-slate-500 font-bold uppercase">Avg Duration</div>
+                                <div className="text-sm font-bold">{Math.round((data.average_duration_seconds ?? 0) / 60)}m</div>
+                            </div>
+                        </div>
+                        <div className="glass-panel p-4 rounded-xl border border-white/5 flex items-center gap-3">
+                            <i className="fa-solid fa-list-check text-amber-400 text-lg"></i>
+                            <div>
+                                <div className="text-[9px] text-slate-500 font-bold uppercase">Avg Action Items</div>
+                                <div className="text-sm font-bold">{data.average_action_items ?? 0} / mtg</div>
+                            </div>
+                        </div>
+                        <div className="glass-panel p-4 rounded-xl border border-white/5 flex items-center gap-3">
+                            <i className="fa-solid fa-globe text-blue-400 text-lg"></i>
+                            <div>
+                                <div className="text-[9px] text-slate-500 font-bold uppercase">Languages</div>
+                                <div className="text-sm font-bold">{Object.keys(data.language_distribution || {}).length}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 11. Main App Container
+        // ==========================================
+        function App() {
+            const [tab, setTab] = useState('dashboard'); // dashboard, analytics
+            const [activeMeetingId, setActiveMeetingId] = useState(null);
+            const [activeLanguage, setActiveLanguage] = useState('original');
+            
+            // Upload Form States
+            const [file, setFile] = useState(null);
+            const [title, setTitle] = useState('');
+            const [statusMsg, setStatusMsg] = useState('');
+            const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+            // Active Meeting Component Data
+            const [status, setStatus] = useState({ status: 'completed' });
+            const [transcript, setTranscript] = useState({ text: '', segments: [] });
+            const [summary, setSummary] = useState(null);
+            const [actionItems, setActionItems] = useState([]);
+            const [reminders, setReminders] = useState([]);
+            const [sentiments, setSentiments] = useState([]);
+            const [questions, setQuestions] = useState([]);
+
+            // Sidebar history list
+            const [meetings, setMeetings] = useState([]);
+            const [search, setSearch] = useState('');
+
+            // Live ws states
+            const [activeSessionId, setActiveSessionId] = useState(null);
+            const [liveInterimTranscript, setLiveInterimTranscript] = useState('');
+            const [voiceCommand, setVoiceCommand] = useState(null);
+
+            // Fetch Sidebar History
+            useEffect(() => {
+                fetch(`${API_BASE}/search?q=${encodeURIComponent(search)}`)
+                    .then(res => res.ok ? res.json() : [])
+                    .then(data => {
+                        if (Array.isArray(data)) {
+                            data.sort((a,b) => b.meeting_id - a.meeting_id);
+                            setMeetings(data);
+                        }
+                    })
+                    .catch(console.error);
+            }, [search, refreshTrigger]);
+
+            // Poll active meeting pipeline status
+            useEffect(() => {
+                if (!activeMeetingId) return;
+                setActiveLanguage('original');
+                
+                const fetchDetails = () => {
+                    fetch(`${API_BASE}/transcript/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : { text: '', segments: [] })
+                        .then(setTranscript)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/summary/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : null)
+                        .then(setSummary)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/actions/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : [])
+                        .then(setActionItems)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/reminders/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : [])
+                        .then(setReminders)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/sentiment/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : [])
+                        .then(setSentiments)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/questions/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : [])
+                        .then(setQuestions)
+                        .catch(console.error);
+                };
+
+                const checkStatus = () => {
+                    fetch(`${API_BASE}/status/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : { status: 'failed' })
+                        .then(data => {
+                            setStatus(data);
+                            if (data.status === 'completed' || data.status === 'failed') {
+                                clearInterval(poller);
+                            }
+                            fetchDetails();
+                        }).catch(console.error);
+                };
+
+                checkStatus();
+                const poller = setInterval(checkStatus, 3000);
+                return () => clearInterval(poller);
+            }, [activeMeetingId]);
+
+            const handleUpload = async (e) => {
+                e.preventDefault();
+                if (!file) return;
+                setStatusMsg('Uploading file...');
+                
+                const fd = new FormData();
+                fd.append('file', file);
+                if (title.trim()) fd.append('title', title.trim());
+
+                try {
+                    const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: fd });
+                    if (res.status === 409) {
+                        const data = await res.json();
+                        setStatusMsg('Duplicate upload. Loading existing log.');
+                        setActiveMeetingId(data.meeting_id);
+                        setTab('dashboard');
+                        setFile(null);
+                        setTitle('');
+                        setRefreshTrigger(p => p+1);
+                        return;
+                    }
+                    if (!res.ok) throw new Error("Upload rejection");
+                    const data = await res.json();
+                    setStatusMsg('File processed. Starting background calculations.');
+                    setActiveMeetingId(data.meeting_id);
+                    setTab('dashboard');
+                    setFile(null);
+                    setTitle('');
+                    setRefreshTrigger(p => p+1);
+                } catch (err) {
+                    setStatusMsg('Failed to process upload.');
+                }
+            };
+
+            const handleVoiceCommand = (cmd) => {
+                setVoiceCommand(cmd);
+                if (cmd.action === 'show_questions') {
+                    setTab('dashboard');
+                } else if (cmd.action === 'export_report') {
+                    window.open(`${API_BASE}/report/${activeMeetingId}?format=pdf`, '_blank');
+                }
+            };
+
+            const handleLanguageChange = async (code) => {
+                setActiveLanguage(code);
+                if (code === 'original') {
+                    // reload original
+                    fetch(`${API_BASE}/transcript/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : { text: '', segments: [] })
+                        .then(setTranscript)
+                        .catch(console.error);
+                    fetch(`${API_BASE}/summary/${activeMeetingId}`)
+                        .then(res => res.ok ? res.json() : null)
+                        .then(setSummary)
+                        .catch(console.error);
+                    return;
+                }
+                try {
+                    const res = await fetch(`${API_BASE}/translate/${activeMeetingId}?target_lang=${code}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setTranscript(prev => ({
+                            ...prev,
+                            text: data.translated_transcript,
+                            segments: [{ start: 0, text: data.translated_transcript, confidence: 1.0 }]
+                        }));
+                        setSummary(prev => ({
+                            ...prev,
+                            summary_text: data.translated_summary,
+                            executive_summary: data.translated_summary.slice(0, 200)
+                        }));
+                    }
+                } catch (e) {}
+            };
+
+            return (
+                <div className="flex h-screen overflow-hidden text-slate-200">
+                    {/* Sidebar panel */}
+                    <aside className="w-80 flex-shrink-0 flex flex-col h-full bg-[#07090e] border-r border-white/5">
+                        <div className="p-4 border-b border-white/5 flex items-center gap-2.5">
+                            <div className="bg-purple-600/10 p-2 rounded text-purple-400 border border-purple-500/10 animate-pulse">
+                                <i className="fa-solid fa-wand-magic-sparkles text-sm"></i>
+                            </div>
+                            <div>
+                                <h1 className="font-extrabold text-xs tracking-wider uppercase text-slate-100">AI Meeting Assistant</h1>
+                                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">MCA Systems</span>
+                            </div>
+                        </div>
+
+                        {/* Switcher Tab */}
+                        <div className="p-3 grid grid-cols-2 gap-2 border-b border-white/5 bg-slate-950/20 text-[11px] font-bold">
+                            <button onClick={() => setTab('dashboard')} className={`py-1.5 px-3 rounded flex justify-center items-center gap-1 ${tab === 'dashboard' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>
+                                <i className="fa-solid fa-gauge"></i> Dashboard
+                            </button>
+                            <button onClick={() => setTab('analytics')} className={`py-1.5 px-3 rounded flex justify-center items-center gap-1 ${tab === 'analytics' ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>
+                                <i className="fa-solid fa-chart-pie"></i> Workspace
+                            </button>
+                        </div>
+
+                        {/* Upload Audio Form */}
+                        <div className="p-4 border-b border-white/5 bg-slate-950/10 flex flex-col gap-3">
+                            <form onSubmit={handleUpload}>
+                                <label htmlFor="audio-file" className={`border border-dashed border-white/10 rounded-xl p-4 flex flex-col items-center justify-center gap-1.5 cursor-pointer hover:border-purple-500/50 ${file ? 'bg-purple-500/[0.01] border-purple-500/30' : ''}`}>
+                                    <i className={`fa-solid fa-cloud-arrow-up text-lg ${file ? 'text-purple-400' : 'text-slate-500'}`}></i>
+                                    <div className="text-center">
+                                        <div className="text-[11px] font-bold text-slate-200 truncate max-w-[190px]">
+                                            {file ? file.name : 'Upload Meeting Audio'}
+                                        </div>
+                                    </div>
+                                    <input id="audio-file" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,.webm" onChange={(e) => { setFile(e.target.files[0]); setStatusMsg(''); }} className="hidden" />
+                                </label>
+                                {file && (
+                                    <div className="flex flex-col gap-2 mt-2">
+                                        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Meeting Title (optional)" className="w-full bg-slate-900 border border-white/5 rounded p-1.5 text-[11px] outline-none text-slate-200" />
+                                        <button type="submit" className="w-full py-1.5 bg-purple-600 hover:bg-purple-500 text-xs font-bold rounded text-white">Process File</button>
+                                    </div>
+                                )}
+                            </form>
+                            {statusMsg && <div className="text-[10px] text-purple-400 font-bold">{statusMsg}</div>}
+                        </div>
+
+                        {/* Live Recording Toggle Component */}
+                        <div className="p-3.5 border-b border-white/5">
+                            <LiveDetectionToggle
+                                onSessionStart={(meetingId, sessionId) => {
+                                    setActiveSessionId(sessionId);
+                                    setActiveMeetingId(meetingId);
+                                    setTranscript({ text: '', segments: [] });
+                                    setTab('dashboard');
+                                }}
+                                onSessionStop={() => {
+                                    setActiveSessionId(null);
+                                    setRefreshTrigger(p => p+1);
+                                }}
+                                onTranscriptUpdate={(msg) => {
+                                    if (msg.is_final) {
+                                        setLiveInterimTranscript('');
+                                        setTranscript(prev => ({
+                                            ...prev,
+                                            segments: [...prev.segments, { start: prev.segments.length * 5, text: msg.text, confidence: msg.confidence }]
+                                        }));
+                                    } else {
+                                        setLiveInterimTranscript(msg.text);
+                                    }
+                                }}
+                                onVoiceCommand={handleVoiceCommand}
+                                activeMeetingId={activeMeetingId}
+                            />
+                        </div>
+
+                        {/* Recent History List */}
+                        <div className="flex-1 flex flex-col overflow-hidden">
+                            <div className="px-4 py-2 flex items-center bg-slate-950/10">
+                                <i className="fa-solid fa-magnifying-glass text-slate-500 mr-2 text-xs"></i>
+                                <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search titles..." className="bg-transparent text-xs outline-none w-full py-1 text-slate-300" />
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                                {meetings.map(m => {
+                                    const active = m.meeting_id === activeMeetingId;
+                                    return (
+                                        <button key={m.meeting_id} onClick={() => { setActiveMeetingId(m.meeting_id); setTab('dashboard'); }} className={`w-full text-left p-2.5 rounded-lg border text-xs flex flex-col gap-1 transition ${
+                                            active ? 'bg-purple-600/10 border-purple-500/30' : 'bg-transparent border-transparent hover:bg-white/[0.01]'
+                                        }`}>
+                                            <span className={`font-semibold truncate ${active ? 'text-purple-400' : 'text-slate-300'}`}>{m.title || `Meeting #${m.meeting_id}`}</span>
+                                            <span className="text-[9px] text-slate-500">#{m.meeting_id} | {m.language ? m.language.toUpperCase() : 'EN'}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                    </aside>
+
+                    {/* Main Workspace Panel */}
+                    <main className="flex-grow h-full bg-[#0b0f19] flex flex-col overflow-hidden">
+                        {tab === 'analytics' ? (
+                            <AnalyticsOverview />
+                        ) : activeMeetingId ? (
+                            <div className="flex-grow flex flex-col overflow-y-auto p-5 gap-5">
+                                {/* Title bar */}
+                                <header className="border-b border-white/5 pb-3.5 flex items-center justify-between">
+                                    <div>
+                                        <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                                            <span>{transcript?.text ? 'Sync Session Complete' : 'Processing Pipeline...'}</span>
+                                            {['queued', 'preprocessing', 'transcribing', 'nlp_extraction', 'summarizing'].includes(status.status) && (
+                                                <i className="fa-solid fa-spinner fa-spin text-purple-400 text-xs"></i>
+                                            )}
+                                        </h2>
+                                        <span className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">STATE: {status.status}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-3">
+                                        <TranslationSwitcher activeLanguage={activeLanguage} onLanguageChange={handleLanguageChange} />
+                                        <button onClick={() => window.open(`${API_BASE}/report/${activeMeetingId}?format=pdf`)} className="bg-slate-900 border border-white/5 text-slate-300 hover:border-white/10 text-xs px-2.5 py-1.5 rounded flex items-center gap-1 font-semibold">
+                                            <i className="fa-solid fa-file-pdf"></i> PDF
+                                        </button>
+                                        <button onClick={() => window.open(`${API_BASE}/report/${activeMeetingId}?format=docx`)} className="bg-slate-900 border border-white/5 text-slate-300 hover:border-white/10 text-xs px-2.5 py-1.5 rounded flex items-center gap-1 font-semibold">
+                                            <i className="fa-solid fa-file-word"></i> Word
+                                        </button>
+                                    </div>
+                                </header>
+
+                                {/* Modular Dashboard Layout */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+                                    <div className="lg:col-span-2 flex flex-col gap-5">
+                                        <SummaryCard summary={summary} />
+                                        <LiveTranscriptPane transcript={transcript} liveTranscript={liveInterimTranscript} />
+                                    </div>
+                                    <div className="flex flex-col gap-5">
+                                        <ActionItemsTable actionItems={actionItems} onStatusToggle={(actionId, status) => {
+                                            setActionItems(prev => prev.map(a => a.action_id === actionId ? { ...a, status } : a));
+                                        }} meetingId={activeMeetingId} />
+                                        
+                                        <SentimentTimeline sentimentData={sentiments} />
+                                        <QuestionsLog questions={questions} />
+                                        <ReminderPanel reminders={reminders} onReminderUpdate={(remId, status) => {
+                                            setReminders(prev => prev.map(r => r.reminder_id === remId ? { ...r, status } : r));
+                                        }} meetingId={activeMeetingId} />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-2">
+                                    <EmailComposer meetingId={activeMeetingId} />
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-3">
+                                <i className="fa-solid fa-circle-play text-4xl text-slate-700 animate-pulse"></i>
+                                <div className="text-xs font-bold tracking-wider uppercase text-slate-400">Select or Start a Meeting</div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Voice command toaster overlay */}
+                    {voiceCommand && (
+                        <div className="fixed bottom-5 right-5 bg-slate-900 border border-purple-500/30 p-3 rounded-lg shadow-xl flex items-center gap-2.5 max-w-xs animate-slideIn">
+                            <i className="fa-solid fa-command text-purple-400 text-xs"></i>
+                            <div className="text-[11px] font-semibold text-slate-200">{voiceCommand.message}</div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
