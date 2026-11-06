@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Command, ArrowRight } from 'lucide-react';
+import { Command } from 'lucide-react';
 
 export default function VoiceCommandBar({ lastCommand }) {
   const [visible, setVisible] = useState(false);

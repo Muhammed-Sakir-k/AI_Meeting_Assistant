@@ -1,17 +1,20 @@
 import os
 import sys
 import logging
+import asyncio
 
 # Ensure project root is in python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from database.db import init_db
+from database.db import SessionLocal, init_db
 from backend.api.routes import router as api_router
+from backend.database.models import Meeting
+from backend.tasks.pipeline_tasks import run_meeting_pipeline
 
 # Configure Logging
 logging.basicConfig(
@@ -63,27 +66,30 @@ def health_check():
     health = {
         "status": "healthy",
         "database": "connected",
-        "redis": "connected",
+        "redis": "optional",
         "models": {}
     }
     
     # Check Database
+    db = None
     try:
         db = SessionLocal()
         db.execute(text("SELECT 1"))
-        db.close()
     except Exception as e:
         health["status"] = "unhealthy"
         health["database"] = f"failed: {str(e)}"
+    finally:
+        if db is not None:
+            db.close()
         
     # Check Redis
     try:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         r = redis.from_url(redis_url, socket_timeout=1.0)
         r.ping()
+        health["redis"] = "connected"
     except Exception as e:
-        health["status"] = "unhealthy"
-        health["redis"] = f"failed: {str(e)}"
+        health["redis"] = f"unavailable (optional; using background tasks): {e}"
         
     # Check Models status
     try:
@@ -104,6 +110,52 @@ def health_check():
         health["models_error"] = str(e)
         
     return health
+
+
+@app.on_event("startup")
+async def resume_interrupted_meetings():
+    db = SessionLocal()
+    try:
+        interrupted = db.query(Meeting).filter(
+            Meeting.processing_status.in_(
+                ["queued", "preprocessing", "transcribing", "nlp_extraction", "summarizing"]
+            ),
+            Meeting.audio_path.isnot(None),
+            Meeting.audio_path != "",
+        ).all()
+        pending = [
+            (meeting.meeting_id, meeting.audio_path, meeting.title or "Meeting")
+            for meeting in interrupted
+        ]
+        for meeting in interrupted:
+            meeting.processing_status = "queued"
+        db.commit()
+    finally:
+        db.close()
+
+    if not pending:
+        return
+
+    try:
+        import redis
+        from celery_worker import celery_app
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        redis.from_url(redis_url, socket_timeout=1.0).ping()
+        active_workers = celery_app.control.inspect(timeout=1.0).active()
+    except Exception as e:
+        logger.info(f"Celery unavailable during recovery; resuming interrupted meetings locally: {e}")
+        active_workers = None
+
+    if active_workers:
+        logger.info("Celery workers are active; leaving interrupted meeting jobs to Celery.")
+        return
+
+    tasks = BackgroundTasks()
+    for meeting_id, file_path, title in pending:
+        tasks.add_task(run_meeting_pipeline, meeting_id, file_path, title)
+    asyncio.get_running_loop().create_task(tasks())
+    logger.info(f"Resuming {len(pending)} interrupted meeting pipeline(s) locally.")
 
 # Restore pre-compiled dist folder if it was disabled
 dist_disabled_dir = os.path.abspath("frontend/dist_disabled")

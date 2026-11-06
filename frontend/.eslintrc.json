@@ -1,0 +1,28 @@
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "es2021": true
+  },
+  "extends": "eslint:recommended",
+  "plugins": [
+    "react"
+  ],
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module",
+    "ecmaFeatures": {
+      "jsx": true
+    }
+  },
+  "rules": {
+    "react/jsx-uses-vars": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "varsIgnorePattern": "^React$",
+        "argsIgnorePattern": "^_"
+      }
+    ]
+  }
+}

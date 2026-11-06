@@ -16,11 +16,13 @@ from backend.api.routes_analytics import router as analytics_router
 from backend.api.routes_voice import router as voice_router
 from backend.api.routes_report import router as report_router
 from backend.api.routes_search import router as search_router
+from backend.api.routes_auth import router as auth_router
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Include all the sub-routers
+router.include_router(auth_router)
 router.include_router(upload_router)
 router.include_router(transcript_router)
 router.include_router(summary_router)

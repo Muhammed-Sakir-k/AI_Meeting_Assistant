@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Square, Play } from 'lucide-react';
+import { Mic, MicOff } from 'lucide-react';
 
 export default function LiveDetectionToggle({ onSessionStart, onSessionStop, onTranscriptUpdate, onVoiceCommand, activeMeetingId }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -213,7 +213,11 @@ export default function LiveDetectionToggle({ onSessionStart, onSessionStop, onT
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch (e) {}
+      } catch (e) {
+        if (e.name !== 'InvalidStateError') {
+          console.warn("Error stopping SpeechRecognition:", e);
+        }
+      }
     }
 
     // 4. Hit backend to finalize session

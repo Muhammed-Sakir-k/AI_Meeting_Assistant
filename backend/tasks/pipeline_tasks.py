@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 # Database imports
 from backend.database.db import SessionLocal
 from backend.database.models import (
-    Meeting, Transcript, ActionItem, Summary, Sentiment, Question
+    Meeting, Transcript, Translation, ActionItem, Summary, Sentiment, Question, Reminder
 )
 
 # Pipeline engines imports
@@ -111,6 +111,12 @@ def run_meeting_pipeline(meeting_id: int, file_path: str, title: str):
     """
     db = SessionLocal()
     try:
+        # A restarted or retried pipeline must rebuild derived data rather than
+        # leave duplicates from a run that stopped partway through.
+        for model in (Reminder, Translation, Transcript, Summary, Sentiment, Question, ActionItem):
+            db.query(model).filter(model.meeting_id == meeting_id).delete(synchronize_session=False)
+        db.commit()
+
         # 1. Preprocessing Stage
         update_meeting_status(db, meeting_id, "preprocessing")
         logger.info(f"Preprocessing audio: {file_path}")

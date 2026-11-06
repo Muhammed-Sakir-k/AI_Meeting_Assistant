@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Sparkles, Activity, FileVideo, LayoutDashboard, UploadCloud, FileAudio, Settings, AlertCircle, XCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Sparkles, Activity, LayoutDashboard, UploadCloud, FileAudio, AlertCircle, LogOut, ShieldAlert } from 'lucide-react';
 import MeetingHistory from './pages/MeetingHistory';
 import MeetingDetail from './pages/MeetingDetail';
 import AnalyticsOverview from './pages/AnalyticsOverview';
 import LiveDetectionToggle from './components/LiveDetectionToggle';
 import VoiceCommandBar from './components/VoiceCommandBar';
 import Login from './pages/Login';
-import { LogOut, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   const [user, setUser] = useState(null); // { username, role }
@@ -105,7 +104,7 @@ export default function App() {
     triggerRefresh();
   };
 
-  const handleSessionStop = (meetingId) => {
+  const handleSessionStop = () => {
     setActiveSessionId(null);
     setLiveInterimTranscript('');
     triggerRefresh();
@@ -154,16 +153,6 @@ export default function App() {
       window.open(`/report/${activeMeetingId}?format=${format}`, '_blank');
     }
   };
-
-  // Switch translations triggered by voice commands
-  useEffect(() => {
-    const handleVoiceTranslate = (e) => {
-      const langCode = e.detail;
-      // We trigger a reload on detail view using dynamic bindings
-    };
-    window.addEventListener('voice-translate', handleVoiceTranslate);
-    return () => window.removeEventListener('voice-translate', handleVoiceTranslate);
-  }, []);
 
   if (!user) {
     return <Login onLoginSuccess={(u) => setUser(u)} />;

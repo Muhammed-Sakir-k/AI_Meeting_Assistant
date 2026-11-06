@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileDown, Clock, Activity, Calendar, Globe, Award, Sparkles, LayoutDashboard, BrainCircuit, Users } from 'lucide-react';
+import { FileDown, Clock, Calendar, Globe, LayoutDashboard, BrainCircuit, Users } from 'lucide-react';
 import SummaryCard from '../components/SummaryCard';
 import ActionItemsTable from '../components/ActionItemsTable';
 import LiveTranscriptPane from '../components/LiveTranscriptPane';
@@ -35,19 +35,31 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
     // Reset translation
     setSelectedLang('original');
     
-    fetchMeetingData();
-    
+    fetchMeetingData({ includeTranscript: false, includeSummary: false });
+
     let interval = null;
+    let transcriptLoaded = false;
+    let summaryLoaded = false;
     const checkStatus = async () => {
       try {
         const res = await fetch(`/status/${meetingId}`);
         if (res.ok) {
           const data = await res.json();
           setStatus(data);
+
+          const transcriptReady = ['nlp_extraction', 'summarizing', 'completed'].includes(data.status);
+          const summaryReady = data.status === 'completed';
+          if ((transcriptReady && !transcriptLoaded) || (summaryReady && !summaryLoaded)) {
+            transcriptLoaded = transcriptLoaded || transcriptReady;
+            summaryLoaded = summaryLoaded || summaryReady;
+            fetchMeetingData({
+              includeTranscript: transcriptReady,
+              includeSummary: summaryReady
+            });
+          }
           
           if (data.status === 'completed') {
             clearInterval(interval);
-            fetchMeetingData(); // Reload full data
           } else if (data.status === 'failed') {
             clearInterval(interval);
           }
@@ -73,7 +85,7 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
     }
   }, [wsTranscriptSegments, activeSessionId]);
 
-  const fetchMeetingData = async () => {
+  const fetchMeetingData = async ({ includeTranscript = true, includeSummary = true } = {}) => {
     try {
       // Fetch meeting metadata
       const mtRes = await fetch(`/meetings/${meetingId}`);
@@ -83,19 +95,23 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
       }
 
       // 1. Fetch transcript
-      const trRes = await fetch(`/transcript/${meetingId}`);
-      if (trRes.ok) {
-        const data = await trRes.json();
-        setTranscript(data);
-        setOriginalTranscript(data);
+      if (includeTranscript) {
+        const trRes = await fetch(`/transcript/${meetingId}`);
+        if (trRes.ok) {
+          const data = await trRes.json();
+          setTranscript(data);
+          setOriginalTranscript(data);
+        }
       }
 
       // 2. Fetch summary
-      const smRes = await fetch(`/summary/${meetingId}`);
-      if (smRes.ok) {
-        const data = await smRes.json();
-        setSummary(data);
-        setOriginalSummary(data);
+      if (includeSummary) {
+        const smRes = await fetch(`/summary/${meetingId}`);
+        if (smRes.ok) {
+          const data = await smRes.json();
+          setSummary(data);
+          setOriginalSummary(data);
+        }
       }
 
       // 3. Fetch actions
@@ -168,6 +184,17 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
     }
   };
 
+  useEffect(() => {
+    const handleVoiceTranslate = (event) => {
+      if (typeof event.detail === 'string') {
+        handleLanguageChange(event.detail);
+      }
+    };
+
+    window.addEventListener('voice-translate', handleVoiceTranslate);
+    return () => window.removeEventListener('voice-translate', handleVoiceTranslate);
+  }, [handleLanguageChange]);
+
   const handleStatusToggle = (actionId, newStatus) => {
     setActionItems(prev => prev.map(item => 
       item.action_id === actionId ? { ...item, status: newStatus } : item
@@ -213,6 +240,12 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0b0f19] overflow-y-auto">
+      {status.status === 'failed' && (
+        <div role="alert" className="bg-red-500/10 border-b border-red-500/20 py-2.5 px-6 text-xs text-red-300 font-semibold">
+          Meeting processing failed. Check the server logs for details before retrying.
+        </div>
+      )}
+
       {/* Top Banner Pipeline Status */}
       {isPipelineActive && (
         <div className="bg-primary-600/10 border-b border-primary-500/20 py-2.5 px-6 flex items-center justify-between text-xs text-primary-400 font-semibold gap-4 animate-pulse">
@@ -329,7 +362,7 @@ export default function MeetingDetail({ meetingId, activeSessionId, wsTranscript
         {activeTab === 'tools' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
             <div className="lg:col-span-2 flex flex-col gap-6">
-              <EmailComposer meetingId={meetingId} actionItems={actionItems} userRole={userRole} />
+              <EmailComposer meetingId={meetingId} userRole={userRole} />
             </div>
             <div className="flex flex-col gap-6">
               <QuestionsLog questions={questions} />

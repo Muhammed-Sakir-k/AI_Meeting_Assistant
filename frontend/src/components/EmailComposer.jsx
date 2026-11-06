@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Send, Copy, RefreshCw, Check } from 'lucide-react';
 
-export default function EmailComposer({ meetingId, actionItems, userRole }) {
+export default function EmailComposer({ meetingId, userRole }) {
   const [draftType, setDraftType] = useState('mom'); // mom, action_assignment, followup
   const [recipient, setRecipient] = useState('');
   const [subject, setSubject] = useState('');

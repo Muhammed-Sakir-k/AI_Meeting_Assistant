@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ListChecks, CheckCircle2, Circle, AlertTriangle, AlertCircle, Clock } from 'lucide-react';
+import { ListChecks, CheckCircle2, Circle, Clock } from 'lucide-react';
 
 export default function ActionItemsTable({ actionItems, onStatusToggle, meetingId, userRole }) {
   const [filterOwner, setFilterOwner] = useState('All');

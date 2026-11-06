@@ -1,6 +1,6 @@
 import React from 'react';
 import { Line } from 'react-chartjs-2';
-import { Heart, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import {
   Chart as ChartJS,
   CategoryScale,

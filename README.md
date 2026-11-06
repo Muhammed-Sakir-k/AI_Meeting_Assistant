@@ -10,6 +10,7 @@ An AI-powered meeting documentation system for transcribing meeting audio, summa
 - FastAPI backend and a React dashboard.
 - SQLite by default, with optional MySQL configuration.
 - Optional Celery/Redis task dispatch; uploads fall back to FastAPI background tasks when no Celery worker is available.
+- Long recordings are preprocessed in memory-bounded segments, and interrupted local jobs resume when the app restarts.
 
 ## Requirements
 

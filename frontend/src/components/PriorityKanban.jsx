@@ -1,5 +1,5 @@
 import React from 'react';
-import { Kanban, AlertCircle, ArrowUpRight, ArrowDownRight, RefreshCcw } from 'lucide-react';
+import { Kanban, AlertCircle, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 export default function PriorityKanban({ actionItems }) {
   // Group action items by priority

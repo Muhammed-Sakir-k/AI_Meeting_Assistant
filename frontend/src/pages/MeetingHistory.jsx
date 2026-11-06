@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, RotateCw, Sparkles, FolderOpen, Calendar, HelpCircle } from 'lucide-react';
+import { Search, RotateCw, FolderOpen, Calendar } from 'lucide-react';
 
 export default function MeetingHistory({ activeMeetingId, onSelectMeeting, refreshTrigger, onRefresh }) {
   const [meetings, setMeetings] = useState([]);
